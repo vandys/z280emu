@@ -1,13 +1,10 @@
 /***************************************************************
- * Enter HALT state; write 1 to fake port on first execution
+ * Enter HALT state via vectored handler
  ***************************************************************/
-#define ENTER_HALT(cs) {                                        \
-	(cs)->_PC--;                                                \
-	(cs)->HALT = 1;                                             \
-}
+#define ENTER_HALT(cs) ((cs)->idle_halt(cs))
 
 /***************************************************************
- * Leave HALT state; write 0 to fake port
+ * Leave HALT state
  ***************************************************************/
 #define LEAVE_HALT(cs) {                                        \
 	if( (cs)->HALT )                                            \

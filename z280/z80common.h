@@ -147,6 +147,8 @@ enum address_spacenum
 #define DASMFLAG_LENGTHMASK    0x0000ffff   // the low 16-bits contain the actual length
 
 typedef int (*device_irq_acknowledge_callback)(device_t *device, int irqnum);
+struct z280_state;
+typedef UINT32 (*cpu_idle_halt)(struct z280_state *);
 typedef void (*devcb_write_line)(device_t *device, int state);
 typedef UINT8 (*init_byte_callback)(device_t *device);
 

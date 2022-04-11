@@ -3,6 +3,7 @@
 #ifndef __Z280_H__
 #define __Z280_H__
 
+#include <sys/time.h>
 #include "z80common.h"
 #include "z80daisy.h"
 #include "z280uart.h"
@@ -203,7 +204,10 @@ offs_t cpu_disassemble_z280(device_t *device, char *buffer, offs_t pc, const UIN
 
 struct z280_device *cpu_create_z280(char *tag, UINT32 type, UINT32 clock, 
     struct address_space *ram,
-	struct address_space *iospace, device_irq_acknowledge_callback irqcallback, struct z80daisy_interface *daisy_init,
+	struct address_space *iospace,
+	device_irq_acknowledge_callback irqcallback,
+	cpu_idle_halt idlehalt,
+	struct z80daisy_interface *daisy_init,
 	init_byte_callback bti_init_cb, /* init BTI by AD0-AD7 on reset */
 	int bus16, /* OPT pin 8 or 16bit bus */
 	UINT32 ctin0, UINT32 ctin1, UINT32 ctin2, /* CTINx clocks (optional) */
@@ -217,5 +221,12 @@ void z280_set_rdy_line(device_t *device, int rdyline, int state);
                                                  
 offs_t cpu_get_state_z280(device_t *device,int device_state_entry);
 void cpu_string_export_z280(device_t *device, int device_state_entry, char *string);
+extern void prepare_halt(struct z280_state *);
+extern int is_halted(struct z280_state *),
+    uart_active(struct z280_state *);
+
+#ifdef IDLE_HALT
+extern int next_timer(struct z280_state *cs, UINT16 *tmp);
+#endif
 
 #endif /* __Z280_H__ */

@@ -27,8 +27,7 @@
 #include <sys/time.h>
 
 #ifdef SOCKETCONSOLE
-#define BASE_PORT 10280
-#define MAX_SOCKET_PORTS 5
+int enable_aux = 0;
 #define XTALCLK 29491200
 int enable_quadser = 0;
 #include "sconsole.h"
@@ -367,6 +366,152 @@ void disableCTRLC() {
 #endif
 }
 
+#ifdef IDLE_HALT
+/*
+ * flag_consoles()
+ *	Fill in select() bits for active TTY's
+ *
+ * Return highest active file descriptor; 0 if none.
+ */
+static int
+flag_consoles(fd_set *readfds)
+{
+    int x, fd, highfd = -1;
+
+    for (x = 0; x < MAX_SOCKET_PORTS; ++x) {
+	fd = client_sockets[x];
+	if (fd == INVALID_SOCKET) {
+	    continue;
+	}
+	if (fd > highfd) {
+	    highfd = fd;
+	}
+	FD_SET(fd, readfds);
+    }
+    return(highfd+1);
+}
+
+/*
+ * idle_halt()
+ *	Implement CPU "halt" instruction with emulator idle
+ *
+ * We fall asleep for a time interval, based on our timer(s).
+ * We also arrange to take TTY interrupts from our terminal socket(s).
+ *
+ * (Note, "cs" is opaque CPU state to us, we call into the instruction
+ *  emulator to interrogate it.)
+ */
+UINT32
+idle_halt(struct z280_state *cs)
+{
+    long tmsec, tmusec;
+    struct timeval tmo1, tmo2;
+    int timers, consoles;
+    fd_set readfds;
+
+    // # of timer ticks until the next timer goes off
+    UINT16 tticks;
+
+    // # of _CPU_ ticks until a timer goes off
+    UINT32 newticks;
+    int res, was_halted;
+
+    // Back up to the halt instruction, mark CPU halt state
+    // (Note entry state before setting halt state.)
+    was_halted = is_halted(cs);
+    prepare_halt(cs);
+
+    // If we're bit-banging out the UART, just spin
+    //  (TBD, could the inter-bit wait time be worth sleeping on?)
+    // If we're already halted, let the outer sim run into an
+    //  interrupt happens and clears that state.
+    if (was_halted || uart_active(cs)) {
+	return(3);
+    }
+
+    // Think about a timeout for the select()
+    timers = next_timer(cs, &tticks);
+    if (timers) {
+	if (!tticks) {
+	    // Timer expired, just go around to let the emulation
+	    //  deliver the interrupt.
+	    return(3);
+	}
+
+	// Calculate time interval until nearest timer expires
+
+	/*
+	 * Z280RC CPU timers run at 3.6864 MHz (1/4 of CPU clock)
+	 * Scale calculation to microseconds
+	 */
+	tmusec = (tticks * 1000000L) / 3686400L;
+	tmsec = tmusec / 1000000L;
+	tmusec %= 1000000L;
+	tmo1.tv_sec = tmsec;
+	tmo1.tv_usec = tmusec;
+    }
+
+    // Select on any open TTY's
+    FD_ZERO(&readfds);
+#ifdef SOCKETCONSOLE
+    consoles = flag_consoles(&readfds);
+#else
+    consoles = 0;
+#endif
+
+    // Wait for timeout or typing
+    if (timers) {
+	tmo2 = tmo1;
+    }
+    res = select(consoles, consoles ? &readfds : NULL, NULL, NULL,
+	timers ? &tmo1 : NULL);
+
+    // Arrange for CPU ticks to reflect the passing of time
+    if (timers) {
+
+	// If all the time ran out, just use the timer ticks value;
+	//  the time interval has less resolution.
+	if (!tmo1.tv_sec && !tmo1.tv_usec) {
+	    newticks = tticks << 2;
+
+	} else {
+	    unsigned long usecs;
+
+	    // How many uSeconds until an event came in
+	    usecs = (tmo2.tv_sec - tmo1.tv_sec) * 1000000 +
+	     ((int)tmo2.tv_usec - (int)tmo1.tv_usec);
+
+	    // Number of cycles/sec, times usecs, then scale down
+	    // (We do it in this order to avoid integer truncation.)
+	    newticks = (usecs * 3686400L) / 1000000L;
+
+	    // Our outer sim is WRT CPU clocks, which are 4x of timer ticks
+	    // Round up by 1, so the timer always advances.
+	    newticks = (newticks + 1) << 2;
+	}
+
+    } else {
+
+	// Act as if it's just the time of the halt instruction
+	newticks = 3;
+    }
+
+    // Timers or typing, just let the simulation continue
+    return(newticks);
+}
+
+#else
+
+/* Simple/classic halt treatment; just keep running */
+int
+idle_halt(struct z280_state *cs)
+{
+    prepare_halt(cs);
+}
+
+#endif /* IDLE_HALT */
+
+
 struct address_space ram = {ram_read_byte,ram_read_word,ram_write_byte,ram_write_word,ram_read_byte,ram_read_word};
 struct address_space iospace = {io_read_byte,io_read_word,io_write_byte,io_write_word,NULL,NULL};
 
@@ -449,8 +594,18 @@ int main(int argc, char** argv)
 	/* cpu is @XTALCLK/2 (14.7456)
 	   bus is cpu/2      ( 7.3728)
 	   ctin1 is bus/4    ( 1.8432) */
-	cpu = cpu_create_z280("Z280",Z280_TYPE_Z280,XTALCLK/2,&ram,&iospace,irq0ackcallback,NULL/*daisychain*/,
-		init_bti,1/*Z-BUS*/,0,XTALCLK/16,0,uart_rx,uart_tx);
+	cpu = cpu_create_z280("Z280",
+	    Z280_TYPE_Z280,
+	    XTALCLK/2,
+	    &ram, &iospace,
+	    irq0ackcallback,
+
+	    /* Hook for halt opcode; possibly idle sim CPU */
+	    idle_halt,
+	    NULL /*daisychain*/,
+	    init_bti, 1 /*Z-BUS*/,
+	    0,
+	    XTALCLK/16,0,uart_rx,uart_tx);
 	cpu_reset_z280(cpu);
 
 	quadser = pc16554_device_create("QUADSER", cpu, cpu->m_clock/2, OX16950,

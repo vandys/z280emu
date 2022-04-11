@@ -2,11 +2,13 @@ ifeq ($(OS),Windows_NT)
 	SOCKLIB = -lws2_32
 endif
 
-CCOPTS += -O3 -DSOCKETCONSOLE -std=gnu89 -fcommon
+# Add -DIDLE_HALT to have emulator relinquish CPU while
+#  waiting for timeouts/interrupts in halted state
+CCOPTS += -O3 -DSOCKETCONSOLE -DIDLE_HALT -std=gnu89 -fcommon
 
 all: z280rc makedisk dis280
 
-z280rc: ide.o z280.o z280dasm.o z80daisy.o z280uart.o z280rc.o rtc_z280rc.o ds1202_1302.o ins8250.o
+z280rc: ide.o z280.o z280dasm.o z80daisy.o z280uart.o z280rc.o rtc_z280rc.o ds1202_1302.o ins8250.o sconsole.o
 	$(CC) $(CCOPTS) -s -o z280rc $^ $(SOCKLIB)
 
 z280rc.o: z280rc.c sconsole.h z280dbg.h z280/z280.h z280/z80daisy.h z280/z80common.h ds1202_1302/ds1202_1302.h
@@ -47,3 +49,6 @@ dis280:	dis280.o z280dasm.o
 
 dis280.o: dis280.c
 	$(CC) $(CCOPTS) -c dis280.c
+
+sconsole.o: sconsole.c
+	$(CC) $(CCOPTS) -c sconsole.c

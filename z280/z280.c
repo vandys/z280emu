@@ -94,9 +94,10 @@ struct z280_state
 	UINT8   after_EI;                       /* are we in the EI shadow? */
 	UINT32  ea;                             /* effective address */
 	int     eapdr;                          /* PDR used to calculate ea */
-	UINT16  timer_cnt;
+	UINT32  timer_cnt;
 	struct z80_daisy_chain *daisy;	/* daisy chain */
 	device_irq_acknowledge_callback irq_callback;
+	cpu_idle_halt idle_halt;
 	struct z280_device *device;
 	struct address_space *ram;
 	struct address_space *iospace;
@@ -1275,7 +1276,10 @@ int z280_take_dma(struct z280_state *cpustate)
 
 struct z280_device *cpu_create_z280(char *tag, UINT32 type, UINT32 clock, 
     struct address_space *ram,
-	struct address_space *iospace, device_irq_acknowledge_callback irqcallback, struct z80daisy_interface *daisy_init,
+	struct address_space *iospace,
+	device_irq_acknowledge_callback irqcallback,
+	cpu_idle_halt idlehalt,
+	struct z80daisy_interface *daisy_init,
 	init_byte_callback bti_init_cb, /* init BTI by AD0-AD7 on reset */
 	int bus16, /* OPT pin 8 or 16bit bus */
 	UINT32 ctin0, UINT32 ctin1, UINT32 ctin2, /* CTINx clocks (optional) */
@@ -1301,6 +1305,7 @@ struct z280_device *cpu_create_z280(char *tag, UINT32 type, UINT32 clock,
 	if (daisy_init != NULL)
 		cpustate->daisy = z80_daisy_chain_create(d,daisy_init); // allocate head and build chain pointers
 	cpustate->irq_callback = irqcallback;
+	cpustate->idle_halt = idlehalt;
 
 	d->bti_init_cb = bti_init_cb;
 	d->m_bus16 = bus16;
@@ -1627,7 +1632,7 @@ void clock_timers(struct z280_state *cpustate, int cycles)
 
 	if (cpustate->timer_cnt >= 4) // p.9-2, fairly tough divisor. (timers decrement almost every instruction)
 	{
-		UINT16 decr = cpustate->timer_cnt >>2;
+		UINT16 decr = cpustate->timer_cnt >> 2;
 		cpustate->timer_cnt &= 3;
 
 		int i;
@@ -1654,6 +1659,110 @@ void clock_timers(struct z280_state *cpustate, int cycles)
 		}
 	}
 }
+
+/*
+ * API on z280_state; mark us as at a halt instruction.  We back
+ *  up the PC to point at it, and we mark ourselves as HALT'ed
+ *  so that interrupts know to clear HALT and move to the next
+ *  instruction.
+ */
+void
+prepare_halt(struct z280_state *cs)
+{
+    cs->_PC--;
+    cs->HALT = 1;
+}
+
+#ifdef IDLE_HALT
+
+// ctcsr value for a timer; is it running?
+#define CT_RUNNING(csr) (!(csr & Z280_CTCR_CT) && \
+		((csr & (Z280_CTCSR_EN | Z280_CTCSR_GT)) == \
+		 (Z280_CTCSR_EN | Z280_CTCSR_GT)) )
+
+/*
+ * is_halted()
+ *	Tell if cs->HALT is set
+ */
+int
+is_halted(struct z280_state *cs)
+{
+    return(cs->HALT);
+}
+
+/*
+ * uart_active()
+ *	Tell if a UART is bit-banging data
+ */
+int
+uart_active(struct z280_state *cs)
+{
+    if (!(cs->device->z280uart->m_uartcr & 0x8 /*UARTCR_CS*/)) {
+	if (cs->device->z280uart->rx_bits_rem ||
+		cs->device->z280uart->tx_bits_rem) {
+	    return(1);
+	}
+    }
+    return(0);
+}
+
+/*
+ * next_timer()
+ *	Calculate pending z280 timers
+ *
+ * Returns whether any timers are running.  If so, the
+ *  number of ticks is in *tmp (can be zero!)
+ */
+int
+next_timer(struct z280_state *cs, UINT16 *tmp)
+{
+    // # timer ticks until an interrupt will pop up
+    UINT16 tticks = 0;
+
+    // Flag that _any_ counter is running
+    int running = 0;
+
+    // Linked counting of timers 0 and 1
+    UINT8 csr0 = cs->ctcsr[0],
+	csr1 = cs->ctcsr[1],
+	csr2 = cs->ctcsr[2];
+
+    // Timer channel 0, running timer?
+    if (CT_RUNNING(csr0)) {
+	tticks = cs->ctctr[0];
+	running = 1;
+    }
+
+    // Timer channel 1, running & sooner?
+    // (Its decrement is clocked by 0 when chained.)
+    if (!(csr0 & Z280_CTCR_CTC)) {
+	if (CT_RUNNING(csr1)) {
+	    if (cs->ctctr[1] < tticks) {
+		tticks = cs->ctctr[1];
+	    }
+	    running = 1;
+	}
+    }
+
+    // Timer channel 2
+    if (CT_RUNNING(csr2)) {
+	running = 1;
+	if (cs->ctctr[2] < tticks) {
+	    tticks = cs->ctctr[2];
+	}
+    }
+
+    // No timers?  Return.
+    if (!running) {
+	return(0);
+    }
+
+    // A timer pops in this many timer ticks
+    *tmp = tticks;
+    return(1);
+}
+
+#endif /* IDLE_HALT */
 
 // helper function to calculate UART baud rate
 UINT32 get_brg_const_z280(struct z280_device *d)

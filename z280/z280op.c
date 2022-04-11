@@ -135,7 +135,7 @@ OP(op,72) { WM(cpustate,  cpustate->_HL, cpustate->_D );                        
 OP(op,73) { WM(cpustate,  cpustate->_HL, cpustate->_E );                                            } /* LD   (HL),E      */
 OP(op,74) { WM(cpustate,  cpustate->_HL, cpustate->_H );                                            } /* LD   (HL),H      */
 OP(op,75) { WM(cpustate,  cpustate->_HL, cpustate->_L );                                            } /* LD   (HL),L      */
-OP(op,76) { if (MSR(cpustate)&Z280_MSR_BH) { cpustate->extra_cycles += take_trap(cpustate, Z280_TRAP_BP); } else CHECK_PRIV(cpustate) { ENTER_HALT(cpustate); } } /* HALT             */
+OP(op,76) { if (MSR(cpustate)&Z280_MSR_BH) { cpustate->extra_cycles += take_trap(cpustate, Z280_TRAP_BP); } else CHECK_PRIV(cpustate) { cpustate->extra_cycles += ENTER_HALT(cpustate); } } /* HALT             */
 OP(op,77) { WM(cpustate,  cpustate->_HL, cpustate->_A );                                            } /* LD   (HL),A      */
 
 OP(op,78) { cpustate->_A = cpustate->_B;                                                } /* LD   A,B         */
